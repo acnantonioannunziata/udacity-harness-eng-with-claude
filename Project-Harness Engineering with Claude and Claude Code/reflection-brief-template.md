@@ -10,6 +10,17 @@
 - **Verification:** The four systems passed their test suites with 30, 30, 35, and 33 passing tests respectively.
 - **Approximate API spend:** The System 1 run reported an estimated total cost of **$0.1313**. System 3 required no API call, and System 4 used a recorded response.
 
+## Verification evidence
+
+The submitted `evidence/` directory contains identifiable verification output for all four systems:
+
+- **System 1 — Agentic loop:** `evidence/01_agentic_loop_pytest.txt` shows the project path, 30 collected tests, and `30 passed`.
+- **System 2 — Context strategy:** `evidence/02_context_strategy_pytest.txt` shows the project path, 30 collected tests, and `30 passed`.
+- **System 3 — Claude Code configuration:** `evidence/03_claude_code_validator_and_pytest.txt` shows validator output `OK` with exit code 0, followed by 35 collected tests and `35 passed`.
+- **System 4 — Orchestration:** `evidence/04_orchestration_pytest.txt` shows the project path, 33 collected tests, and `33 passed`.
+
+Each evidence file includes a system header or project path so that its output can be unambiguously associated with the corresponding system.
+
 ---
 
 ## Part 1 — Per-system
@@ -18,7 +29,9 @@
 
 #### 1. Loop control
 
-In `runs/20261019_135042/traces/claim_07_tree_falls_on_car.jsonl`, the trace records the structured `stop_reason` values produced on each turn. Loop control is implemented in `claims_intake/loop.py`: the harness continues when the response requests tool use and stops when the model returns `end_turn`. An unexpected stop reason is treated as an error instead of being silently accepted. This makes the model's structured response state, rather than its prose, the control signal for the loop.
+Loop termination is decided in `claims_intake/loop.py`, inside the `run()` function. The harness continues the loop when `response.stop_reason == "tool_use"`. When `response.stop_reason == "end_turn"`, `run()` appends the final assistant content and returns a `FinalState`, terminating the loop. Any other stop reason raises `UnexpectedStopReason` rather than being silently accepted. This makes the model's structured response state, rather than its prose, the control signal for the loop.
+
+This behavior is demonstrated by `runs/20261019_135042/traces/claim_07_tree_falls_on_car.jsonl`, where four turns with `stop_reason == "tool_use"` are followed by a final turn with `stop_reason == "end_turn"`, ending with `route_to_adjuster`.
 
 #### 2. Anti-pattern
 
@@ -26,7 +39,7 @@ One anti-pattern checked by `tests/test_antipatterns.py` is controlling executio
 
 #### 3. Tool design
 
-`route_to_adjuster` and `escalate_claim` are overlapping terminal actions because both end automated claim processing, but they represent different outcomes. Their descriptions distinguish ordinary routing from cases that require human review, such as unresolved ambiguity, low confidence, policy disputes, or missing facts. Tool failures are returned as structured JSON with `is_error=true`, allowing the agent and harness to recognize an error explicitly. A plain-text error would be less reliable because it would require interpreting unstructured wording.
+`route_to_adjuster` and `escalate_to_human` are overlapping terminal actions because both end automated claim processing, but they represent different outcomes. Their descriptions distinguish ordinary routing from cases that require human review, such as unresolved ambiguity, low confidence, policy disputes, or missing facts. Tool failures are returned as structured JSON with `is_error=true`, allowing the agent and harness to recognize an error explicitly. A plain-text error would be less reliable because it would require interpreting unstructured wording.
 
 #### 4. Your numbers
 
@@ -88,7 +101,7 @@ The generated `data/hot_state.json` was **965 bytes**, well below the approximat
 
 #### 14. Three layers
 
-- **Model:** The model performs semantic work such as claim interpretation, context summarization, and shift analysis. Evidence appears in the System 1 traces, the System 2 evaluation answers, and the System 4 recorded shift summary.
+- **Model:** The model performs semantic work such as interpreting claim facts and selecting an appropriate terminal action. A concrete Model-layer artifact is `runs/20261019_135042/traces/claim_07_tree_falls_on_car.jsonl`, which records the model's sequence of tool requests and its final `route_to_adjuster` action.
 - **Harness:** `claims_intake/loop.py`, structured tool schemas, validators, and state-size checks constrain how model output is executed and accepted.
 - **Orchestration:** `shift_monitor/pipeline.py` coordinates indexed retrieval, model invocation, state updates, and scratchpad persistence across a shift run.
 
@@ -108,7 +121,9 @@ The System 4 fork tests verify that separate hypothesis scratchpads remain indep
 
 #### 18. Blast radius
 
-The largest risk in the Claims Intake Agent is sending a customer claim to an inappropriate destination or allowing processing to end without a valid terminal outcome. The design limits terminal actions to routing or escalation, uses structured tool schemas, and controls the loop through `stop_reason`. Structured tool errors and explicit terminal actions reduce the blast radius by making ambiguous or invalid execution states visible to the harness instead of allowing them to pass silently.
+The largest risk in the Claims Intake Agent is sending a customer claim to an inappropriate destination or allowing processing to end without a valid terminal outcome. The design limits terminal actions to `route_to_adjuster` or `escalate_to_human`, uses structured tool schemas, and controls the loop through `stop_reason`.
+
+In run `20261019_135042`, `summary.md` records six routed claims and two escalated claims. The traces for `claim_04` and `claim_06` show that the model ended its turn without issuing a valid terminal action, so the deterministic backstop escalated those claims instead of allowing processing to finish silently. This own-run evidence demonstrates how explicit terminal actions, structured errors, and the backstop reduce the blast radius of ambiguous or incomplete model behavior.
 
 ---
 
