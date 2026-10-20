@@ -19,3 +19,12 @@ uv.lock
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Generated Python and test artifacts
+**/.venv/
+**/.pytest_cache/
+**/__pycache__/
+*.py[cod]
+
+# Reference solutions are not part of the submission
+**/solution/
