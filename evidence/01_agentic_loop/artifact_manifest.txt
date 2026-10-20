@@ -1,0 +1,18 @@
+SYSTEM: Claims Intake Agent - stop_reason-driven agentic loop
+SOURCE RUN: runs/20261019_135042
+
+Submitted artifacts:
+1080 bytes | summary.md
+117 bytes | artifact_manifest.txt
+1249 bytes | traces/claim_04_neighbor_injury.jsonl
+1249 bytes | traces/claim_06_low_confidence_escalation.jsonl
+1904 bytes | escalations.jsonl
+1987 bytes | traces/claim_02_stolen_bike.jsonl
+2019 bytes | queues/auto.jsonl
+2409 bytes | traces/claim_08_minor_porch_damage.jsonl
+2473 bytes | traces/claim_01_kitchen_fire.jsonl
+2489 bytes | traces/claim_07_tree_falls_on_car.jsonl
+2765 bytes | traces/claim_05_auto_collision.jsonl
+2854 bytes | traces/claim_03_water_damage.jsonl
+2882 bytes | queues/property_damage.jsonl
+651 bytes | queues/theft.jsonl

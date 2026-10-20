@@ -19,7 +19,11 @@ The submitted `evidence/` directory contains identifiable verification output fo
 - **System 3 — Claude Code configuration:** `evidence/03_claude_code_validator_and_pytest.txt` shows validator output `OK` with exit code 0, followed by 35 collected tests and `35 passed`.
 - **System 4 — Orchestration:** `evidence/04_orchestration_pytest.txt` shows the project path, 33 collected tests, and `33 passed`.
 
-Each evidence file includes a system header or project path so that its output can be unambiguously associated with the corresponding system.
+Each test log includes a system header or project path so that its output can be unambiguously associated with the corresponding system. The submission also includes run-level evidence beyond the automated test logs:
+
+- `evidence/01_agentic_loop/` contains the run `20261019_135042` summary, eight non-empty turn-by-turn traces, queue records, escalation records, and an artifact manifest.
+- `evidence/04_orchestration/shift_run_output.txt` contains the exact SQL-filtered Shift C command, the `--since 2026-04-01T00:00:00Z` value, exit code 0, the `shift C: 17 new defects` result, and state-file size measurements.
+- `evidence/04_orchestration/hot_state.json` is 965 bytes, and `evidence/04_orchestration/shift_scratchpad.jsonl` is 646 bytes after the verified run.
 
 ---
 
@@ -29,9 +33,9 @@ Each evidence file includes a system header or project path so that its output c
 
 #### 1. Loop control
 
-Loop termination is decided in `claims_intake/loop.py`, inside the `run()` function. The harness continues the loop when `response.stop_reason == "tool_use"`. When `response.stop_reason == "end_turn"`, `run()` appends the final assistant content and returns a `FinalState`, terminating the loop. Any other stop reason raises `UnexpectedStopReason` rather than being silently accepted. This makes the model's structured response state, rather than its prose, the control signal for the loop.
+Loop termination is decided in `claims_intake/loop.py`, inside the `run()` function beginning at line 46. The harness continues when `response.stop_reason == "tool_use"` and dispatches every structured tool-use block. When `response.stop_reason == "end_turn"`, `run()` appends the final assistant content and returns a `FinalState`, terminating the loop. Any other stop reason raises `UnexpectedStopReason` at lines 130–131 rather than being silently accepted. This makes the model's structured response state, rather than its prose, the control signal for the loop.
 
-This behavior is demonstrated by `runs/20261019_135042/traces/claim_07_tree_falls_on_car.jsonl`, where four turns with `stop_reason == "tool_use"` are followed by a final turn with `stop_reason == "end_turn"`, ending with `route_to_adjuster`.
+The submitted trace `evidence/01_agentic_loop/traces/claim_07_tree_falls_on_car.jsonl`, from run `20261019_135042`, demonstrates this behavior turn by turn. Turns 1 through 4 each record `stop_reason: "tool_use"` and the harness continues after every turn. Turn 4 invokes the terminal `route_to_adjuster` tool, and turn 5 records `stop_reason: "end_turn"` with no additional tool calls, causing the harness to return. The trace therefore provides four `tool_use` transitions followed by one `end_turn` transition.
 
 #### 2. Anti-pattern
 
@@ -39,7 +43,11 @@ One anti-pattern checked by `tests/test_antipatterns.py` is controlling executio
 
 #### 3. Tool design
 
-`route_to_adjuster` and `escalate_to_human` are overlapping terminal actions because both end automated claim processing, but they represent different outcomes. Their descriptions distinguish ordinary routing from cases that require human review, such as unresolved ambiguity, low confidence, policy disputes, or missing facts. Tool failures are returned as structured JSON with `is_error=true`, allowing the agent and harness to recognize an error explicitly. A plain-text error would be less reliable because it would require interpreting unstructured wording.
+`route_to_adjuster` and `escalate_to_human` are intentionally overlapping terminal actions because both end automated claim processing, but they represent different outcomes. `route_to_adjuster` is used when the claim has enough validated information for ordinary handling, while `escalate_to_human` is used when ambiguity, low confidence, policy concerns, or missing facts make automated routing unsafe.
+
+Tool failures are constructed by `_err()` in `claims_intake/tools.py`, lines 196–204. `_err()` serializes a structured JSON object containing `is_error: true`, an error category, a `retryable` flag, and a message. This is safer than returning plain-text errors because the model and harness can identify failures through explicit fields instead of interpreting informal wording.
+
+A concrete outcome appears in `evidence/01_agentic_loop/summary.md`: `claim_04_neighbor_injury` was escalated after 2 turns. Its submitted trace, `evidence/01_agentic_loop/traces/claim_04_neighbor_injury.jsonl`, shows one `tool_use` turn followed by `end_turn` without a valid terminal tool invocation. The deterministic backstop therefore escalated the claim instead of allowing processing to finish without a routing decision. The run summary records six routed claims and two escalated claims across eight processed fixtures.
 
 #### 4. Your numbers
 
@@ -85,7 +93,13 @@ Project-level configuration includes `./CLAUDE.md` and the shared `.claude/` dir
 
 #### 11. Push work down
 
-The warm database was seeded from `fixtures/defects.json`. Indexed retrieval is implemented by `WarmStore.defects_since()` in `shift_monitor/warm.py`, using a bounded SQL query that filters by timestamp, orders the records, and applies a limit. The recorded run used `--since 2026-04-01T00:00:00Z` and returned **17 new defects**. Filtering in SQLite keeps irrelevant historical rows out of the prompt and gives the model only the records required for the shift analysis.
+The warm database was seeded from `fixtures/defects.json`. Indexed retrieval is implemented by `WarmStore.defects_since()` in `shift_monitor/warm.py`, using a bounded SQL query that filters records by timestamp, orders the results, and applies a limit. This keeps irrelevant historical rows out of the model prompt.
+
+The submitted run artifact `evidence/04_orchestration/shift_run_output.txt` records the exact command:
+
+`python -m shift_monitor run-shift --shift C --since 2026-04-01T00:00:00Z --recorded-response fixtures/recorded_responses/shift_C_2026-04-30.json`
+
+The run completed with exit code 0 and printed `shift C: 17 new defects`. Filtering in SQLite therefore reduced the input to the 17 April records required for the Shift C analysis rather than loading the complete defect history.
 
 #### 12. Crash recovery
 
@@ -93,7 +107,9 @@ The warm database was seeded from `fixtures/defects.json`. Indexed retrieval is 
 
 #### 13. Small state
 
-The generated `data/hot_state.json` was **965 bytes**, well below the approximate **5 KB** budget. It contained 17 recent defect hashes, the current shift summary, three active alerts, and threshold statuses. The same run appended a **323-byte** record to `data/shift_scratchpad.jsonl`, identifying the 17 analyzed defects and the resulting conclusion. Keeping hot state small matters because the monitor is designed to operate over many shifts without allowing immediately loaded state to grow without bound.
+The submitted `evidence/04_orchestration/hot_state.json` is 965 bytes, well below the approximate 5 KB budget. It contains 17 recent defect hashes, the current shift summary, three active alerts, and threshold statuses. The accompanying `evidence/04_orchestration/shift_run_output.txt` records the same 965-byte measurement after the successful Shift C run.
+
+The submitted `evidence/04_orchestration/shift_scratchpad.jsonl` is 646 bytes after the verified run. The scratchpad contains append-only shift findings, including the entry documenting 17 defects analyzed since `2026-04-01T00:00:00Z`. Keeping immediate hot state small matters because the monitor is designed to operate across many shifts without allowing the state loaded for every invocation to grow without bound. Larger historical data remains in SQLite, while the scratchpad preserves compact append-only findings.
 
 ---
 
@@ -101,11 +117,13 @@ The generated `data/hot_state.json` was **965 bytes**, well below the approximat
 
 #### 14. Three layers
 
-- **Model:** The model performs semantic work such as interpreting claim facts and selecting an appropriate terminal action. A concrete Model-layer artifact is `runs/20261019_135042/traces/claim_07_tree_falls_on_car.jsonl`, which records the model's sequence of tool requests and its final `route_to_adjuster` action.
-- **Harness:** `claims_intake/loop.py`, structured tool schemas, validators, and state-size checks constrain how model output is executed and accepted.
-- **Orchestration:** `shift_monitor/pipeline.py` coordinates indexed retrieval, model invocation, state updates, and scratchpad persistence across a shift run.
+- **Model:** The model boundary is implemented in `claims_intake/client.py`. `make_client()` constructs the Anthropic client, while `DEFAULT_MODEL = "claude-haiku-4-5-20251001"` selects the model used for semantic interpretation and tool selection. The resulting model behavior is visible in `evidence/01_agentic_loop/traces/claim_07_tree_falls_on_car.jsonl`, where the model requests policy lookup, records claim facts, classifies the claim, assesses severity, and selects `route_to_adjuster`.
 
-These layers address different failure modes. The model supplies judgment, the harness enforces local execution rules, and orchestration coordinates the wider workflow and durable state.
+- **Harness:** `claims_intake/loop.py` implements the stop-reason-driven execution protocol, continuing only on `tool_use`, returning on `end_turn`, and raising `UnexpectedStopReason` for unsupported states. `claims_intake/tools.py` implements the structured tool contracts, JSON success and error results, and the terminal routing and escalation actions.
+
+- **Orchestration:** `shift_monitor/pipeline.py` coordinates SQL-filtered retrieval, model invocation, hot-state updates, and scratchpad persistence across a shift run. The completed orchestration is demonstrated by `evidence/04_orchestration/shift_run_output.txt`, which records a successful Shift C run over 17 filtered defects.
+
+These layers address different failure modes. The Model layer supplies semantic judgment, the Harness layer controls how model outputs may affect execution, and the Orchestration layer coordinates retrieval, invocation, and durable state across the wider workflow.
 
 #### 15. Deterministic vs prompt
 
@@ -117,13 +135,19 @@ System 2 manages context within one long conversation. It reduced the transcript
 
 #### 17. Reliability you cannot see in one run
 
-The System 4 fork tests verify that separate hypothesis scratchpads remain independent and that merging findings appends results without rewriting existing records. A single successful shift run would not reveal cross-fork mutation or ordering bugs. The **33 passing tests**, especially the fork and scratchpad tests, provide evidence for isolation properties that cannot be demonstrated by the final `shift C: 17 new defects` output alone.
+The isolation mechanism is implemented in `shift_monitor/fork.py`. `fork_for_hypothesis()` begins at line 17 and copies the base `hot_state.json` into a hypothesis-specific working directory using `shutil.copyfile`. The function does not modify the base hot-state file. Each hypothesis receives its own directory and therefore its own isolated working state and scratchpad.
+
+`merge_findings()` begins at line 28. It reads entries from each completed fork scratchpad and calls `destination.append(entry)` for every finding. It therefore appends findings to the main scratchpad without replacing or rewriting its existing entries.
+
+These guarantees are checked by `test_fork_for_hypothesis_copies_state_without_mutating_base`, `test_two_forks_produce_independent_scratchpads`, and `test_merge_findings_appends_without_rewriting_existing` in `tests/test_us04_fork_scratchpad.py`. The System 4 suite completed with 33 passing tests. A single successful output such as `shift C: 17 new defects` cannot reveal cross-fork mutations, scratchpad contamination, or rewriting of existing records, so these tests provide reliability evidence that manual inspection of one run cannot provide.
 
 #### 18. Blast radius
 
-The largest risk in the Claims Intake Agent is sending a customer claim to an inappropriate destination or allowing processing to end without a valid terminal outcome. The design limits terminal actions to `route_to_adjuster` or `escalate_to_human`, uses structured tool schemas, and controls the loop through `stop_reason`.
+The largest risk in the Claims Intake Agent is sending a customer claim to an inappropriate destination or allowing processing to end without a valid terminal outcome. The implementation limits valid terminal actions to `route_to_adjuster` and `escalate_to_human`, uses structured tool schemas, and controls execution through `stop_reason` in `claims_intake/loop.py`.
 
-In run `20261019_135042`, `summary.md` records six routed claims and two escalated claims. The traces for `claim_04` and `claim_06` show that the model ended its turn without issuing a valid terminal action, so the deterministic backstop escalated those claims instead of allowing processing to finish silently. This own-run evidence demonstrates how explicit terminal actions, structured errors, and the backstop reduce the blast radius of ambiguous or incomplete model behavior.
+In run `20261019_135042`, the submitted `evidence/01_agentic_loop/summary.md` records six routed claims and two escalated claims. `evidence/01_agentic_loop/traces/claim_04_neighbor_injury.jsonl` contains a `tool_use` turn followed by `end_turn`, while `evidence/01_agentic_loop/traces/claim_06_low_confidence_escalation.jsonl` contains two `tool_use` turns followed by `end_turn`. Neither trace contains a valid terminal tool invocation before `end_turn`.
+
+Instead of allowing those claims to finish silently, the deterministic backstop escalated `claim_04_neighbor_injury` after 2 turns and `claim_06_low_confidence_escalation` after 3 turns, as recorded in `evidence/01_agentic_loop/summary.md` and `evidence/01_agentic_loop/escalations.jsonl`. This own-run evidence demonstrates how explicit terminal actions, structured tool results, and deterministic escalation reduce the blast radius of ambiguous or incomplete model behavior.
 
 ---
 
@@ -131,8 +155,14 @@ In run `20261019_135042`, `summary.md` records six routed claims and two escalat
 
 #### 19. What broke
 
-An earlier System 4 replay used a retrieval timestamp that did not align with the fixture scenario and returned zero new defects. I corrected the invocation by using the required timestamp, `--since 2026-04-01T00:00:00Z`. The verified run then printed **`shift C: 17 new defects`**, generated a **965-byte** `hot_state.json`, and appended a **323-byte** line to `shift_scratchpad.jsonl`. The issue was therefore in the replay invocation parameters rather than in the indexed retrieval, state update, or scratchpad implementation.
+An earlier System 4 replay used a retrieval timestamp that did not align with the fixture scenario and returned zero new defects. The invocation was corrected by using `--since 2026-04-01T00:00:00Z` and the offline fixture `fixtures/recorded_responses/shift_C_2026-04-30.json`.
+
+The corrected command and its complete output are preserved in `evidence/04_orchestration/shift_run_output.txt`. The run completed with exit code 0, printed `shift C: 17 new defects`, produced a 965-byte `evidence/04_orchestration/hot_state.json`, and left a 646-byte `evidence/04_orchestration/shift_scratchpad.jsonl`. The problem was therefore in the replay invocation parameters rather than in indexed retrieval, state updating, or scratchpad persistence.
 
 #### 20. What you'd change
 
-I would make replay scenarios self-describing by storing the scenario timestamp alongside each recorded response and validating that timestamp before execution. This would reduce the chance of using a `--since` value that excludes the fixture records. I would also include the resolved run ID, timestamp, record count, and artifact paths in a small machine-readable run manifest so that the reflection brief and submission evidence can be checked against one authoritative record.
+The first submission included the System 1 run summary but omitted the non-empty trace files from run `20261019_135042`. For example, `claim_07_tree_falls_on_car.jsonl` existed in the run directory and recorded four `tool_use` turns followed by `end_turn`, but it was not available to the reviewer under `evidence/`. The corrected submission now includes it as `evidence/01_agentic_loop/traces/claim_07_tree_falls_on_car.jsonl`.
+
+I would add a machine-readable evidence manifest and a pre-submission validator. The manifest would record each system, source run ID, required artifact path, byte size, command, exit code, and creation timestamp. The validator would fail the packaging step when a required artifact is absent or zero bytes, when a System 1 trace lacks both `tool_use` and `end_turn`, or when the System 4 run output lacks the required `--since` value and `shift C: 17 new defects` result.
+
+I would also make replay scenarios self-describing by storing the expected retrieval timestamp alongside each recorded response. This change is motivated by the earlier failed replay documented in the project history and by the corrected command now preserved in `evidence/04_orchestration/shift_run_output.txt`. Together, these checks would make the submission evidence reproducible and would prevent a working implementation from failing review because its run artifacts were omitted or could not be verified.
